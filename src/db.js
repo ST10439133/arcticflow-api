@@ -7,6 +7,7 @@ import { dirname, join } from 'path';
 import dotenv from 'dotenv';
 
 dotenv.config();
+console.log("===> DB URL loaded:", process.env.DATABASE_URL);
 
 const { Pool } = pg;
 
