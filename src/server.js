@@ -1,8 +1,14 @@
 // src/routes/users.js
-import { Router } from 'express';
-import jwt from 'jsonwebtoken';
-import pool from '../db.js';       // ← adjust if your pool is elsewhere
-import { requireAuth } from '../middleware/auth.js';  // ← adjust path if needed
+import express from 'express';
+import cors from 'cors';
+import dotenv from 'dotenv';
+
+import usersRouter     from './routes/users.js';
+import buildingsRouter from './routes/buildings.js';
+import requestsRouter  from './routes/requests.js';
+import quotesRouter    from './routes/quotes.js';
+import jobsRouter      from './routes/jobs.js';
+import locationsRouter from './routes/locations.js';
 
 const router = Router();
 

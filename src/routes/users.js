@@ -1,7 +1,7 @@
 // src/routes/users.js
 
 import { Router } from 'express';
-import { pool } from '../db.js';
+import { pool } from './db.js';
 import { issueToken, requireAuth } from '../auth.js';
 
 const router = Router();
