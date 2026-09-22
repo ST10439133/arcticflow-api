@@ -10,7 +10,7 @@ const router = Router();
 // ============================================================
 // POST /api/users/sync
 // Called by the mobile app right after Firebase auth succeeds.
-// Creates the user if new, or updates them if they already exist.
+// Creates the user if new, or finds them if they already exist.
 // Returns a signed JWT for subsequent API calls.
 // ============================================================
 router.post('/sync', async (req, res) => {
@@ -21,31 +21,38 @@ router.post('/sync', async (req, res) => {
             return res.status(400).json({ error: 'uid and email are required' });
         }
 
-        // ---------- UPSERT ----------
-        // The `users` table must have a UNIQUE constraint on `email`.
-        // If it doesn't yet, run this in Postgres once:
-        //   ALTER TABLE users ADD CONSTRAINT users_email_key UNIQUE (email);
-       const result = await pool.query(
-    `INSERT INTO users (uid, email, display_name, role, phone_number, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     ON CONFLICT (email)
-     DO UPDATE SET
-         uid          = EXCLUDED.uid,
-         display_name = EXCLUDED.display_name,
-         role         = EXCLUDED.role,
-         phone_number = EXCLUDED.phone_number
-     RETURNING *`,
-    [
-        uid,
-        email,
-        displayName || null,
-        role || 'TECHNICIAN',
-        phoneNumber || null,
-        Date.now(),   
-    ]
-);
+        // ---------- FIND OR CREATE USER ----------
+        // This approach avoids `ON CONFLICT DO UPDATE`, which was causing a
+        // foreign key constraint violation because it can be interpreted as
+        // a DELETE + INSERT by the database.
+        // 1. Try to find the user by email first.
+        let user;
+        const findResult = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
 
-        const user = result.rows[0];
+        if (findResult.rows.length > 0) {
+            // 2. If the user exists, use their record.
+            user = findResult.rows[0];
+        } else {
+            // 3. If the user does not exist, insert a new record.
+            const insertResult = await pool.query(
+                `INSERT INTO users (uid, email, display_name, role, phone_number, created_at)
+                 VALUES ($1, $2, $3, $4, $5, $6)
+                 RETURNING *`,
+                [
+                    uid,
+                    email,
+                    displayName || null,
+                    role || 'TECHNICIAN',
+                    phoneNumber || null,
+                    Date.now(), // Use BIGINT milliseconds to match the DB column type
+                ]
+            );
+            user = insertResult.rows[0];
+        }
+
+        if (!user) {
+            return res.status(500).json({ error: 'Failed to sync user.' });
+        }
 
         // ---------- JWT ----------
         const jwtSecret = process.env.JWT_SECRET;
