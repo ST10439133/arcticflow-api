@@ -25,24 +25,25 @@ router.post('/sync', async (req, res) => {
         // The `users` table must have a UNIQUE constraint on `email`.
         // If it doesn't yet, run this in Postgres once:
         //   ALTER TABLE users ADD CONSTRAINT users_email_key UNIQUE (email);
-        const result = await pool.query(
-            `INSERT INTO users (uid, email, display_name, role, phone_number, created_at)
-             VALUES ($1, $2, $3, $4, $5, NOW())
-             ON CONFLICT (email)
-             DO UPDATE SET
-                 uid          = EXCLUDED.uid,
-                 display_name = EXCLUDED.display_name,
-                 role         = EXCLUDED.role,
-                 phone_number = EXCLUDED.phone_number
-             RETURNING *`,
-            [
-                uid,
-                email,
-                displayName || null,
-                role || 'TECHNICIAN',
-                phoneNumber || null,
-            ]
-        );
+       const result = await pool.query(
+    `INSERT INTO users (uid, email, display_name, role, phone_number, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (email)
+     DO UPDATE SET
+         uid          = EXCLUDED.uid,
+         display_name = EXCLUDED.display_name,
+         role         = EXCLUDED.role,
+         phone_number = EXCLUDED.phone_number
+     RETURNING *`,
+    [
+        uid,
+        email,
+        displayName || null,
+        role || 'TECHNICIAN',
+        phoneNumber || null,
+        Date.now(),   
+    ]
+);
 
         const user = result.rows[0];
 
