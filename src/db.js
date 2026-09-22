@@ -44,3 +44,6 @@ if (process.argv.includes('--migrate')) {
             process.exit(1);
         });
 }
+
+// Provide a default export so `import pool from '../db.js'` also works
+export default pool;

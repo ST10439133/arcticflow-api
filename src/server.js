@@ -1,4 +1,4 @@
-// src/routes/users.js
+// src/server.js
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -10,94 +10,27 @@ import quotesRouter    from './routes/quotes.js';
 import jobsRouter      from './routes/jobs.js';
 import locationsRouter from './routes/locations.js';
 
-const router = Router();
+dotenv.config();
 
-// ============================================================
-// POST /api/users/sync
-// Called by the mobile app right after Firebase auth succeeds.
-// Creates the user if new, or updates them if they already exist.
-// Returns a signed JWT for subsequent API calls.
-// ============================================================
-router.post('/sync', async (req, res) => {
-    try {
-        const { uid, email, displayName, role, phoneNumber } = req.body || {};
+const app = express();
+app.use(cors());
+app.use(express.json({ limit: '2mb' }));
 
-        if (!uid || !email) {
-            return res.status(400).json({ error: 'uid and email are required' });
-        }
+app.get('/', (req, res) => res.json({ ok: true, service: 'arcticflow-api', version: '1.0.0' }));
+app.get('/health', (req, res) => res.json({ ok: true, timestamp: Date.now() }));
 
-        // ---------- UPSERT ----------
-        // The `users` table must have a UNIQUE constraint on `email`.
-        // If it doesn't yet, run this in Postgres once:
-        //   ALTER TABLE users ADD CONSTRAINT users_email_key UNIQUE (email);
-        const result = await pool.query(
-            `INSERT INTO users (uid, email, display_name, role, phone_number, created_at)
-             VALUES ($1, $2, $3, $4, $5, NOW())
-             ON CONFLICT (email)
-             DO UPDATE SET
-                 uid          = EXCLUDED.uid,
-                 display_name = EXCLUDED.display_name,
-                 role         = EXCLUDED.role,
-                 phone_number = EXCLUDED.phone_number
-             RETURNING *`,
-            [
-                uid,
-                email,
-                displayName || null,
-                role || 'TECHNICIAN',
-                phoneNumber || null,
-            ]
-        );
+app.use('/api/users',     usersRouter);
+app.use('/api/buildings', buildingsRouter);
+app.use('/api/requests',  requestsRouter);
+app.use('/api/quotes',    quotesRouter);
+app.use('/api/jobs',      jobsRouter);
+app.use('/api/locations', locationsRouter);
 
-        const user = result.rows[0];
-
-        // ---------- JWT ----------
-        const jwtSecret = process.env.JWT_SECRET;
-        if (!jwtSecret) {
-            console.error('JWT_SECRET env var is missing');
-            return res.status(500).json({ error: 'Server misconfigured: JWT_SECRET missing' });
-        }
-
-        const token = jwt.sign(
-            {
-                uid:   user.uid,
-                email: user.email,
-                role:  user.role,
-            },
-            jwtSecret,
-            { expiresIn: '30d' }
-        );
-
-        // Return both the token and the user record.
-        // The mobile app only needs `token`, but including `user`
-        // is convenient for debugging.
-        return res.json({ token, user });
-    } catch (err) {
-        console.error('POST /api/users/sync failed:', err);
-        return res.status(500).json({ error: err.message });
-    }
+app.use((req, res) => res.status(404).json({ error: `No route for ${req.method} ${req.path}` }));
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err);
+  res.status(err.status || 500).json({ error: err.message || 'Internal server error' });
 });
 
-// ============================================================
-// GET /api/users/me
-// Returns the current user's profile (requires Bearer token).
-// ============================================================
-router.get('/me', requireAuth, async (req, res) => {
-    try {
-        const result = await pool.query(
-            'SELECT * FROM users WHERE uid = $1 LIMIT 1',
-            [req.user.uid]
-        );
-
-        if (result.rows.length === 0) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-
-        return res.json(result.rows[0]);
-    } catch (err) {
-        console.error('GET /api/users/me failed:', err);
-        return res.status(500).json({ error: err.message });
-    }
-});
-
-export default router;
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`ArcticFlow API listening on port ${PORT}`));
