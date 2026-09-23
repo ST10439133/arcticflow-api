@@ -2,16 +2,26 @@
 import { Router } from 'express';
 import jwt from 'jsonwebtoken';
 
-import pool from '../db.js';            // src/db.js
-import { requireAuth } from '../auth.js'; // src/auth.js  ← no "middleware/" folder
+import pool from '../db.js';
+import { requireAuth } from '../auth.js';
 
 const router = Router();
 
 // ============================================================
 // POST /api/users/sync
+//
 // Called by the mobile app right after Firebase auth succeeds.
-// Creates the user if new, or finds them if they already exist.
-// Returns a signed JWT for subsequent API calls.
+//
+// Contract:
+//   - New uid (never seen by the server) → create with the client's role,
+//     defaulting to 'MANAGER' if the client sends nothing or sends an
+//     unknown value.
+//   - Existing uid → PRESERVE the server's role. Update only the cosmetic
+//     fields (display_name, phone_number) so profile edits propagate.
+//
+// The client is expected to call GET /api/users/me right after this to
+// learn the authoritative role, in case the server preserved a different
+// one than the client sent.
 // ============================================================
 router.post('/sync', async (req, res) => {
     try {
@@ -21,40 +31,62 @@ router.post('/sync', async (req, res) => {
             return res.status(400).json({ error: 'uid and email are required' });
         }
 
-        // ---------- FIND OR CREATE USER ----------
-        // This approach avoids `ON CONFLICT DO UPDATE`, which was causing a
-        // foreign key constraint violation because it can be interpreted as
-        // a DELETE + INSERT by the database.
-        // 1. Try to find the user by email first.
+        // Look up by uid OR email — either may already exist.
+        const findResult = await pool.query(
+            'SELECT * FROM users WHERE uid = $1 OR email = $2 LIMIT 1',
+            [uid, email]
+        );
+
         let user;
-        const findResult = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
 
         if (findResult.rows.length > 0) {
-            // 2. If the user exists, use their record.
+            // ---- EXISTING USER: preserve their role ----
             user = findResult.rows[0];
+
+            const updated = await pool.query(
+                `UPDATE users
+                    SET display_name = COALESCE($1, display_name),
+                        phone_number = COALESCE($2, phone_number)
+                  WHERE uid = $3
+                  RETURNING *`,
+                [displayName || null, phoneNumber || null, user.uid]
+            );
+            user = updated.rows[0];
+
+            console.log(
+                `[users/sync] existing user uid=${user.uid} email=${user.email} ` +
+                `role=${user.role} (preserved)`
+            );
         } else {
-            // 3. If the user does not exist, insert a new record.
-            const insertResult = await pool.query(
-                `INSERT INTO users (uid, email, display_name, role, phone_number, created_at)
+            // ---- NEW USER: honor the client's role, default MANAGER ----
+            const roleToUse =
+                role === 'MANAGER' || role === 'TECHNICIAN'
+                    ? role
+                    : 'MANAGER';
+
+            const inserted = await pool.query(
+                `INSERT INTO users
+                    (uid, email, display_name, role, phone_number, created_at)
                  VALUES ($1, $2, $3, $4, $5, $6)
                  RETURNING *`,
                 [
                     uid,
                     email,
                     displayName || null,
-                    role || 'TECHNICIAN',
+                    roleToUse,
                     phoneNumber || null,
-                    Date.now(), // Use BIGINT milliseconds to match the DB column type
+                    Date.now(),
                 ]
             );
-            user = insertResult.rows[0];
+            user = inserted.rows[0];
+
+            console.log(
+                `[users/sync] created user uid=${user.uid} email=${user.email} ` +
+                `role=${user.role}`
+            );
         }
 
-        if (!user) {
-            return res.status(500).json({ error: 'Failed to sync user.' });
-        }
-
-        // ---------- JWT ----------
+        // ---- Sign a JWT for this user ----
         const jwtSecret = process.env.JWT_SECRET;
         if (!jwtSecret) {
             console.error('JWT_SECRET env var is missing');
@@ -63,9 +95,9 @@ router.post('/sync', async (req, res) => {
 
         const token = jwt.sign(
             {
-                uid:   user.uid,
+                uid: user.uid,
                 email: user.email,
-                role:  user.role,
+                role: user.role,
             },
             jwtSecret,
             { expiresIn: '30d' }
@@ -80,7 +112,8 @@ router.post('/sync', async (req, res) => {
 
 // ============================================================
 // GET /api/users/me
-// Returns the current user's profile (requires Bearer token).
+// Returns the authoritative user record. The Android client relies on
+// this to correct its local role after login.
 // ============================================================
 router.get('/me', requireAuth, async (req, res) => {
     try {
